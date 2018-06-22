@@ -1,0 +1,150 @@
+using System;
+using WebSocketJS;
+
+namespace Pomelo.WebglPomelo
+{
+    class StateObject
+    {
+        public const int BufferSize = 1024;
+        internal byte[] buffer = new byte[BufferSize];
+    }
+
+    public class Transporter
+    {
+        public const int HeadLength = 4;
+
+        private WebSocket socket;
+        private Action<byte[]> messageProcesser;
+
+        //Used for get message
+        private StateObject stateObject = new StateObject();
+        private TransportState transportState;
+        private bool onSending = false;
+        private bool onReceiving = false;
+        private byte[] headBuffer = new byte[4];
+        private byte[] buffer;
+        private int bufferOffset = 0;
+        private int pkgLength = 0;
+        internal Action onDisconnect = null;
+        private System.Object _lock = new System.Object();
+
+
+        public Transporter(WebSocket socket, Action<byte[]> processer)
+        {
+            this.socket = socket;
+            this.messageProcesser = processer;
+            transportState = TransportState.readHead;
+            WebSocketReceiver.instance.AddRecListener(socket.address, this);
+            
+        }
+
+        ~Transporter()
+        {
+            WebSocketReceiver.instance.RemoveRecListener(this.socket.address, this);
+        }
+
+
+        public void send(byte[] buffer)
+        {
+            if (this.transportState != TransportState.closed)
+            {
+                socket.Send(buffer);
+                //this.onSending = true;
+            }
+        }
+
+        public void onReceive(byte[] result)
+        {
+            if(result.Length > 0)
+                processBytes(result, 0, result.Length);
+        }
+
+        internal void close()
+        {
+            this.transportState = TransportState.closed;
+        }
+        
+        
+        internal void processBytes(byte[] bytes, int offset, int limit)
+        {
+            if (this.transportState == TransportState.readHead)
+            {
+                readHead(bytes, offset, limit);
+            }
+            else if (this.transportState == TransportState.readBody)
+            {
+                readBody(bytes, offset, limit);
+            }
+        }
+
+        private bool readHead(byte[] bytes, int offset, int limit)
+        {
+            int length = limit - offset;
+            int headNum = HeadLength - bufferOffset;
+
+            if (length >= headNum)
+            {
+                //Write head buffer
+                writeBytes(bytes, offset, headNum, bufferOffset, headBuffer);
+                //Get package length
+                pkgLength = (headBuffer[1] << 16) + (headBuffer[2] << 8) + headBuffer[3];
+
+                //Init message buffer
+                buffer = new byte[HeadLength + pkgLength];
+                writeBytes(headBuffer, 0, HeadLength, buffer);
+                offset += headNum;
+                bufferOffset = HeadLength;
+                this.transportState = TransportState.readBody;
+
+                if (offset <= limit) processBytes(bytes, offset, limit);
+                return true;
+            }
+            else
+            {
+                writeBytes(bytes, offset, length, bufferOffset, headBuffer);
+                bufferOffset += length;
+                return false;
+            }
+        }
+
+        private void readBody(byte[] bytes, int offset, int limit)
+        {
+            int length = pkgLength + HeadLength - bufferOffset;
+            if ((offset + length) <= limit)
+            {
+                writeBytes(bytes, offset, length, bufferOffset, buffer);
+                offset += length;
+
+                //Invoke the protocol api to handle the message
+                this.messageProcesser.Invoke(buffer);
+
+                this.bufferOffset = 0;
+                this.pkgLength = 0;
+
+                if (this.transportState != TransportState.closed)
+                    this.transportState = TransportState.readHead;
+                if (offset < limit)
+                    processBytes(bytes, offset, limit);
+            }
+            else
+            {
+                writeBytes(bytes, offset, limit - offset, bufferOffset, buffer);
+                bufferOffset += limit - offset;
+                this.transportState = TransportState.readBody;
+            }
+        }
+
+        private void writeBytes(byte[] source, int start, int length, byte[] target)
+        {
+            writeBytes(source, start, length, 0, target);
+        }
+
+        private void writeBytes(byte[] source, int start, int length, int offset, byte[] target)
+        {
+            for (int i = 0; i < length; i++)
+            {
+                target[offset + i] = source[start + i];
+            }
+        }
+    }
+}
