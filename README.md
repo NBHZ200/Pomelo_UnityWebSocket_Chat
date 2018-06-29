@@ -9,4 +9,4 @@
 修改者使用的 Unity 版本为 2017.3.1f1 64bit 个人版, 请使用相同 Unity 版本发布 Webgl。<br/>
 基于 SimpleJson.dll<br/>
 
-
+测试：https://badge.fury.io/hooks/github
